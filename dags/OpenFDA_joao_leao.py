@@ -1,11 +1,9 @@
 from airflow import DAG
 from airflow.operators.python import PythonOperator
-from airflow.providers.google.cloud.transfers.local_to_gcs import LocalFilesystemToGCSOperator
 from airflow.providers.google.cloud.operators.bigquery import BigQueryInsertJobOperator
 from datetime import datetime, timedelta
 import pandas as pd
 import requests
-import os
 
 # ====== CONFIG ======
 GCP_PROJECT  = "meu-projeto-471401"
@@ -13,9 +11,6 @@ BQ_DATASET   = "openfda"
 BQ_TABLE     = "openfda_history_hourly"
 BQ_LOCATION  = "US"
 GCP_CONN_ID  = "google_cloud_default"
-GCS_BUCKET   = "meu-bucket-openfda"   # 👈 ajuste aqui para o seu bucket
-GCS_OBJECT   = "openfda/weekly_sum.json"
-LOCAL_FILE   = "/tmp/weekly_sum.json"
 # ====================
 
 
@@ -36,12 +31,33 @@ def fetch_openfda_data(**kwargs):
         df['time'] = pd.to_datetime(df['time'])
         weekly_sum = df.groupby(pd.Grouper(key='time', freq='W'))['count'].sum().reset_index()
         weekly_sum["time"] = weekly_sum["time"].astype(str)
-
-        # Salva local em JSON NDJSON
-        weekly_sum.to_json(LOCAL_FILE, orient="records", lines=True)
     else:
-        # Se não vier nada, cria arquivo vazio
-        pd.DataFrame([]).to_json(LOCAL_FILE, orient="records", lines=True)
+        weekly_sum = pd.DataFrame([])
+
+    # Envia o DataFrame como dicionário no XCom
+    ti.xcom_push(key="openfda_data", value=weekly_sum.to_dict(orient="records"))
+
+
+def save_to_bigquery(**kwargs):
+    from google.cloud import bigquery
+    ti = kwargs['ti']
+    records = ti.xcom_pull(task_ids="fetch_openfda_data", key="openfda_data")
+
+    if records:
+        df = pd.DataFrame(records)
+
+        client = bigquery.Client(project=GCP_PROJECT)
+        table_id = f"{GCP_PROJECT}.{BQ_DATASET}.{BQ_TABLE}"
+
+        job = client.load_table_from_dataframe(
+            df,
+            table_id,
+            location=BQ_LOCATION,
+            job_config=bigquery.LoadJobConfig(
+                write_disposition="WRITE_APPEND"
+            ),
+        )
+        job.result()  # Espera terminar
 
 
 default_args = {
@@ -66,30 +82,9 @@ with DAG(
         python_callable=fetch_openfda_data,
     )
 
-    upload_to_gcs_task = LocalFilesystemToGCSOperator(
-        task_id="upload_to_gcs",
-        src=LOCAL_FILE,
-        dst=GCS_OBJECT,
-        bucket=GCS_BUCKET,
-        gcp_conn_id=GCP_CONN_ID,
-    )
-
-    save_to_bigquery_task = BigQueryInsertJobOperator(
+    save_data_task = PythonOperator(
         task_id="save_to_bigquery",
-        configuration={
-            "load": {
-                "sourceUris": [f"gs://{GCS_BUCKET}/{GCS_OBJECT}"],
-                "sourceFormat": "NEWLINE_DELIMITED_JSON",
-                "writeDisposition": "WRITE_APPEND",  # ou "WRITE_TRUNCATE"
-                "destinationTable": {
-                    "projectId": GCP_PROJECT,
-                    "datasetId": BQ_DATASET,
-                    "tableId": BQ_TABLE,
-                },
-            }
-        },
-        location=BQ_LOCATION,
-        gcp_conn_id=GCP_CONN_ID,
+        python_callable=save_to_bigquery,
     )
 
-    fetch_data_task >> upload_to_gcs_task >> save_to_bigquery_task
+    fetch_data_task >> save_data_task
