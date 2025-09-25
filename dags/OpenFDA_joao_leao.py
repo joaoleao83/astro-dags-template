@@ -58,7 +58,6 @@ with DAG(
     schedule='@monthly',
     start_date=datetime(2020, 11, 1),
     catchup=True,
-    concurrency
     max_active_tasks=1,    
 ) as dag:
 
