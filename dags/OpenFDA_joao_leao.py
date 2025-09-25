@@ -1,6 +1,5 @@
 from airflow import DAG
 from airflow.operators.python import PythonOperator
-from airflow.providers.google.cloud.operators.bigquery import BigQueryInsertJobOperator
 from datetime import datetime, timedelta
 import pandas as pd
 import requests
@@ -49,6 +48,20 @@ def save_to_bigquery(**kwargs):
         client = bigquery.Client(project=GCP_PROJECT)
         table_id = f"{GCP_PROJECT}.{BQ_DATASET}.{BQ_TABLE}"
 
+        # Cria dataset caso não exista
+        dataset_ref = bigquery.Dataset(f"{GCP_PROJECT}.{BQ_DATASET}")
+        client.create_dataset(dataset_ref, exists_ok=True)
+
+        # Cria tabela caso não exista
+        if not any(t.table_id == BQ_TABLE for t in client.list_tables(BQ_DATASET)):
+            schema = [
+                bigquery.SchemaField("time", "STRING"),
+                bigquery.SchemaField("count", "INTEGER"),
+            ]
+            table = bigquery.Table(table_id, schema=schema)
+            client.create_table(table)
+
+        # Carrega os dados
         job = client.load_table_from_dataframe(
             df,
             table_id,
