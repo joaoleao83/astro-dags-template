@@ -58,8 +58,8 @@ with DAG(
     schedule='@monthly',
     start_date=datetime(2020, 11, 1),
     catchup=True,
-    max_active_tasks=1,
-    concurrency=1
+    concurrency
+    max_active_tasks=1,    
 ) as dag:
 
     fetch_data_task = PythonOperator(
