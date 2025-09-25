@@ -14,6 +14,7 @@ GCP_CONN_ID  = "google_cloud_default"
 
 
 def fetch_openfda_data(**kwargs):
+    import logging
     ti = kwargs['ti']
     exec_dt = datetime.strptime(kwargs['ds'], "%Y-%m-%d")
     year, month = exec_dt.year, exec_dt.month
@@ -22,20 +23,26 @@ def fetch_openfda_data(**kwargs):
     end_date = f"{year}{month:02d}{(datetime(year, month, 1) + timedelta(days=31)).replace(day=1) - timedelta(days=1):%d}"
     query_url = f"https://api.fda.gov/drug/event.json?search=patient.drug.medicinalproduct:%22sildenafil+citrate%22+AND+receivedate:[{start_date}+TO+{end_date}]&count=receivedate"
 
+    logging.info(f"Executando request: {query_url}")
     response = requests.get(query_url)
 
     if response.status_code == 200:
         data = response.json()
-        df = pd.DataFrame(data['results'])
-        df['time'] = pd.to_datetime(df['time'])
-        weekly_sum = df.groupby(pd.Grouper(key='time', freq='W'))['count'].sum().reset_index()
-        weekly_sum["time"] = weekly_sum["time"].astype(str)
+        if "results" in data and data["results"]:
+            df = pd.DataFrame(data['results'])
+            df['time'] = pd.to_datetime(df['time'])
+            weekly_sum = df.groupby(pd.Grouper(key='time', freq='W'))['count'].sum().reset_index()
+            weekly_sum["time"] = weekly_sum["time"].astype(str)
+            logging.info(f"Foram encontrados {len(weekly_sum)} registros agregados.")
+            logging.info(f"Exemplo de dados:\n{weekly_sum.head()}")
+        else:
+            logging.warning("Nenhum resultado retornado pela API.")
+            weekly_sum = pd.DataFrame([])
     else:
+        logging.error(f"Erro na API OpenFDA: {response.status_code}")
         weekly_sum = pd.DataFrame([])
 
-    # Envia o DataFrame como dicionário no XCom
     ti.xcom_push(key="openfda_data", value=weekly_sum.to_dict(orient="records"))
-
 
 def save_to_bigquery(**kwargs):
     from google.cloud import bigquery
