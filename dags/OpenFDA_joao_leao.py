@@ -29,12 +29,12 @@ def generate_query_url(year, month):
 
 
 # Function to fetch data from the API and save it to XCom
-def fetch_openfda_data(ds, ti, **context):
-    from airflow.operators.python import get_current_context
-    context = get_current_context()
-    execution_date = context['dag_run'].execution_date
-    year = execution_date.year
-    month = execution_date.month
+def fetch_openfda_data(**kwargs):
+    ti = kwargs['ti']
+    execution_date = kwargs['ds']  # ou kwargs['execution_date'] se estiver disponível
+    exec_dt = datetime.strptime(kwargs['ds'], "%Y-%m-%d")
+    year = exec_dt.year
+    month = exec_dt.month
 
     query_url = generate_query_url(year, month)
     response = requests.get(query_url)
@@ -56,7 +56,8 @@ def fetch_openfda_data(ds, ti, **context):
 
 
 # Function to save data directly to BigQuery
-def save_to_bigquery(ds, ti, **context):
+def save_to_bigquery(**kwargs):
+    ti = kwargs['ti']
     # Retrieve the DataFrame from XCom
     data_dict = ti.xcom_pull(task_ids='fetch_openfda_data', key='openfda_data')
 
@@ -88,7 +89,7 @@ dag = DAG(
     'fetch_openfda_data_monthly',
     default_args=default_args,
     description='Retrieve OpenFDA data monthly and store in BigQuery',
-    schedule='@monthly',       # substitui schedule_interval
+    schedule='@monthly',
     start_date=datetime(2020, 11, 1),
     catchup=True,
     max_active_tasks=1
@@ -96,14 +97,12 @@ dag = DAG(
 
 fetch_data_task = PythonOperator(
     task_id='fetch_openfda_data',
-    provide_context=True,
     python_callable=fetch_openfda_data,
     dag=dag,
 )
 
 save_data_task = PythonOperator(
     task_id='save_to_bigquery',
-    provide_context=True,
     python_callable=save_to_bigquery,
     dag=dag,
 )
