@@ -22,7 +22,7 @@ def fetch_openfda_data(**kwargs):
     
     ti = kwargs['ti']
     context = get_current_context()
-    execution_date = context['dag_run'].execution_date
+    execution_date = context['logical_date']
     year = execution_date.year
     month = execution_date.month
 
