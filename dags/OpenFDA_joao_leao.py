@@ -95,11 +95,10 @@ fetch_task = PythonOperator(
 )
 
 save_data_task = PythonOperator(
-    task_id='save_to_bigquery',
-    provide_context=True,
+    task_id='save_to_bigquery',    
     python_callable=save_to_bigquery,
     dag=dag,
 )
 
-fetch_data_task >> save_data_task
+fetch_task >> save_data_task
 
