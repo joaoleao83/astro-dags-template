@@ -17,8 +17,10 @@ def generate_query_url(year, month):
     return query
 
 # Function to fetch data from the API and save it to XCom
-def fetch_openfda_data(ds, ti, **context):
+def fetch_openfda_data(**kwargs):
     from airflow.operators.python import get_current_context
+    
+    ti = kwargs['ti']
     context = get_current_context()
     execution_date = context['dag_run'].execution_date
     year = execution_date.year
@@ -42,9 +44,11 @@ def fetch_openfda_data(ds, ti, **context):
     # Push the DataFrame to XCom
     ti.xcom_push(key='openfda_data', value=weekly_sum.to_dict())
 
-def save_to_bigquery(ds, ti, **context):
+def save_to_bigquery(**kwargs):
     from pandas import DataFrame
     from pandas_gbq import to_gbq
+
+    ti = kwargs['ti']
 
     # Dados de configuração
     GCP_PROJECT = "meu-projeto-471401"
@@ -84,9 +88,8 @@ dag = DAG(
 )
 
 
-fetch_data_task = PythonOperator(
+fetch_task = PythonOperator(
     task_id='fetch_openfda_data',
-    provide_context=True,
     python_callable=fetch_openfda_data,
     dag=dag,
 )
