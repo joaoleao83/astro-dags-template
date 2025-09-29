@@ -10,6 +10,14 @@ from datetime import datetime, timedelta
 import pandas as pd
 import requests
 
+# ====== CONFIG ======
+GCP_PROJECT  = "meu-projeto-471401"      # e.g., "my-gcp-project"
+BQ_DATASET   = "openfda"                    # e.g., "crypto"
+BQ_TABLE     = "openfda_history"    # e.g., "bitcoin_history_hourly"
+BQ_LOCATION  = "US"                        # dataset location: "US" or "EU"
+GCP_CONN_ID  = "google_cloud_default"      # Airflow connection with a SA that can write to BQ
+# ====================
+
 # Function to generate query URL for a specific month and year
 def generate_query_url(year, month):
     start_date = f"{year}{month:02d}01"
@@ -47,21 +55,63 @@ def fetch_openfda_data(**kwargs):
 
 def save_to_bigquery(**kwargs):
     import pandas as pd
+    from google.cloud.exceptions import NotFound
 
     ti = kwargs['ti']
     data_dict = ti.xcom_pull(task_ids='fetch_openfda_data', key='openfda_data')
-    if data_dict:
-        df = pd.DataFrame.from_dict(data_dict)
-        hook = BigQueryHook(gcp_conn_id='google_cloud_default')  # use seu GCP_CONN_ID
-        dataset_table = 'openfda.openfda_history'
-        # Load dataframe to BigQuery table
+    
+    if not data_dict:
+        print("No data to save to BigQuery")
+        return
+    
+    df = pd.DataFrame.from_dict(data_dict)
+    
+    # Initialize BigQuery hook
+    hook = BigQueryHook(gcp_conn_id=GCP_CONN_ID, location=BQ_LOCATION)
+    
+    # Get BigQuery client
+    client = hook.get_client(project_id=GCP_PROJECT, location=BQ_LOCATION)
+    
+    # Define dataset and table references
+    dataset_ref = client.dataset(BQ_DATASET)
+    table_ref = dataset_ref.table(BQ_TABLE)
+    destination_table = f"{BQ_DATASET}.{BQ_TABLE}"
+    
+    try:
+        # Try to get the table to check if it exists
+        table = client.get_table(table_ref)
+        print(f"Table {GCP_PROJECT}.{destination_table} already exists. Appending data...")
+        
+        # Table exists, append data
         hook.insert_rows_from_dataframe(
-            dataset_table=dataset_table,
+            dataset_table=destination_table,
             dataframe=df,
-            project_id="meu-projeto-471401",
-            location="US",
+            project_id=GCP_PROJECT,
+            location=BQ_LOCATION,
             write_disposition="WRITE_APPEND"
         )
+        
+    except NotFound:
+        print(f"Table {GCP_PROJECT}.{destination_table} does not exist. Creating table and inserting data...")
+        
+        # Table doesn't exist, create it with the data
+        # Define table schema based on the DataFrame
+        table_schema = [
+            {"name": "time", "type": "STRING"},
+            {"name": "count", "type": "INTEGER"},
+        ]
+        
+        # Create table with schema and insert data
+        hook.insert_rows_from_dataframe(
+            dataset_table=destination_table,
+            dataframe=df,
+            project_id=GCP_PROJECT,
+            location=BQ_LOCATION,
+            write_disposition="WRITE_TRUNCATE",  # This will create the table if it doesn't exist
+            table_schema=table_schema
+        )
+    
+    print(f"Successfully saved {len(df)} rows to {GCP_PROJECT}.{destination_table}")
 
 # Define the DAG
 default_args = {
