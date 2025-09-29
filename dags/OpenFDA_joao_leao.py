@@ -56,6 +56,7 @@ def fetch_openfda_data(**kwargs):
 def save_to_bigquery(**kwargs):
     import pandas as pd
     from google.cloud.exceptions import NotFound
+    from google.cloud import bigquery
 
     ti = kwargs['ti']
     data_dict = ti.xcom_pull(task_ids='fetch_openfda_data', key='openfda_data')
@@ -65,53 +66,55 @@ def save_to_bigquery(**kwargs):
         return
     
     df = pd.DataFrame.from_dict(data_dict)
+    print(f"Data to save: {len(df)} rows")
+    print(df.head())
     
-    # Initialize BigQuery hook
+    # Initialize BigQuery hook and get credentials
     hook = BigQueryHook(gcp_conn_id=GCP_CONN_ID, location=BQ_LOCATION)
+    credentials = hook.get_credentials()
     
-    # Get BigQuery client
-    client = hook.get_client(project_id=GCP_PROJECT, location=BQ_LOCATION)
+    # Create destination table reference
+    destination_table = f"{GCP_PROJECT}.{BQ_DATASET}.{BQ_TABLE}"
     
-    # Define dataset and table references
-    dataset_ref = client.dataset(BQ_DATASET)
-    table_ref = dataset_ref.table(BQ_TABLE)
-    destination_table = f"{BQ_DATASET}.{BQ_TABLE}"
-    
+    # Use pandas-gbq to save data to BigQuery
     try:
-        # Try to get the table to check if it exists
-        table = client.get_table(table_ref)
-        print(f"Table {GCP_PROJECT}.{destination_table} already exists. Appending data...")
-        
-        # Table exists, append data
-        hook.insert_rows_from_dataframe(
-            dataset_table=destination_table,
-            dataframe=df,
+        # Try to save with append mode first (table exists)
+        df.to_gbq(
+            destination_table=f"{BQ_DATASET}.{BQ_TABLE}",
             project_id=GCP_PROJECT,
+            if_exists="append",
+            credentials=credentials,
             location=BQ_LOCATION,
-            write_disposition="WRITE_APPEND"
+            progress_bar=False
         )
+        print(f"Table {destination_table} already exists. Data appended successfully.")
         
-    except NotFound:
-        print(f"Table {GCP_PROJECT}.{destination_table} does not exist. Creating table and inserting data...")
-        
-        # Table doesn't exist, create it with the data
-        # Define table schema based on the DataFrame
-        table_schema = [
-            {"name": "time", "type": "STRING"},
-            {"name": "count", "type": "INTEGER"},
-        ]
-        
-        # Create table with schema and insert data
-        hook.insert_rows_from_dataframe(
-            dataset_table=destination_table,
-            dataframe=df,
-            project_id=GCP_PROJECT,
-            location=BQ_LOCATION,
-            write_disposition="WRITE_TRUNCATE",  # This will create the table if it doesn't exist
-            table_schema=table_schema
-        )
+    except Exception as e:
+        # If table doesn't exist, create it with replace mode
+        if "Not found" in str(e) or "does not exist" in str(e):
+            print(f"Table {destination_table} does not exist. Creating table and inserting data...")
+            
+            # Define table schema for better type control
+            table_schema = [
+                {"name": "time", "type": "STRING"},
+                {"name": "count", "type": "INTEGER"},
+            ]
+            
+            df.to_gbq(
+                destination_table=f"{BQ_DATASET}.{BQ_TABLE}",
+                project_id=GCP_PROJECT,
+                if_exists="replace",
+                credentials=credentials,
+                location=BQ_LOCATION,
+                table_schema=table_schema,
+                progress_bar=False
+            )
+            print(f"Table {destination_table} created successfully.")
+        else:
+            print(f"Error saving to BigQuery: {e}")
+            raise e
     
-    print(f"Successfully saved {len(df)} rows to {GCP_PROJECT}.{destination_table}")
+    print(f"Successfully saved {len(df)} rows to {destination_table}")
 
 # Define the DAG
 default_args = {
